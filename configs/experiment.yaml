@@ -1,0 +1,21 @@
+# Experiment Configuration
+models:
+  - deit_tiny
+  - efficientformer_l1
+  - mobilevit_s
+
+pruning:
+  head_ratios: [1.0, 0.75, 0.5, 0.25]
+  mlp_ratios: [1.0, 0.75, 0.5]
+  skip_blocks: [0, 1, 2]
+
+quantization:
+  enabled: true
+  type: dynamic
+  dtype: qint8
+
+benchmark:
+  batch_size: 1
+  input_size: [3, 224, 224]
+  warmup_iters: 50
+  bench_iters: 200

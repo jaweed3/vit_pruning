@@ -1,0 +1,61 @@
+% Template for Ultimatics / ComTech journal submission
+% Structured Pruning and Post-Training Quantization for Lightweight Vision Transformers
+
+\documentclass[conference]{IEEEtran}
+
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{tabularx}
+
+\title{Structured Pruning and Post-Training Quantization\ for Lightweight Vision Transformers on Edge Devices}
+
+\author{
+    \IEEEauthorblockN{Fatih\IEEEauthorrefmark{1},
+    Oddy Virgantara Putra\IEEEauthorrefmark{2}}
+    \IEEEauthorblockA{
+        \IEEEauthorrefmark{1}Informatics Department, ...
+    }
+}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Vision Transformers (ViTs) have achieved remarkable performance across
+various computer vision tasks, but their computational demands remain a
+barrier to edge deployment. This paper systematically investigates the
+compounding effect of structured pruning and post-training quantization
+(PTQ) on lightweight ViT variants. We evaluate DeiT-Tiny, EfficientFormer-L1,
+MobileViT-S, and EdgeViT-S under various pruning ratios (25--75\%) combined
+with INT8 dynamic quantization. Our results show that combining 50\% head
+pruning with PTQ reduces model size by up to 4$\times$ while maintaining
+competitive accuracy, making these models viable for deployment on resource-
+constrained devices such as the Raspberry Pi 4 and NVIDIA Jetson Nano.
+\end{abstract}
+
+\section{Introduction}
+% ...
+
+\section{Related Work}
+% ...
+
+\section{Methodology}
+% ...
+
+\section{Experiments}
+% ...
+
+\section{Results and Discussion}
+% ...
+
+\section{Conclusion}
+% ...
+
+\bibliographystyle{IEEEtran}
+\bibliography{refs}
+\end{document}
