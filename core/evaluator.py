@@ -29,9 +29,11 @@ class ModelMetrics:
     throughput: float = 0.0
 
     def __repr__(self):
+        top1_str = f"{self.top1:.2f}%" if self.top1 is not None else "N/A"
+        top5_str = f"{self.top5:.2f}%" if self.top5 is not None else "N/A"
         lines = [
             "Metrics(",
-            f"  Top-1: {self.top1:.2f}% | Top-5: {self.top5:.2f}%",
+            f"  Top-1: {top1_str} | Top-5: {top5_str}",
             f"  Params: {self.params_m:.2f}M | FLOPs: {self.flops_m:.2f}M",
             f"  Size: {self.size_mb:.2f}MB | Latency: {self.latency_ms:.2f}ms",
             f"  Throughput: {self.throughput:.0f} img/s",
@@ -41,7 +43,7 @@ class ModelMetrics:
 
 
 def evaluate_model(model: nn.Module,
-                   val_loader: torch.utils.data.DataLoader,
+                   val_loader: Optional[torch.utils.data.DataLoader] = None,
                    device: str = "cuda") -> ModelMetrics:
     """Full evaluation: accuracy + compute metrics."""
     metrics = ModelMetrics()
