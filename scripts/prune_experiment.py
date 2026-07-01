@@ -3,7 +3,6 @@
 Run a grid of pruning experiments and save results.
 Scans different pruning ratios for multiple models.
 """
-
 import sys
 import os
 import json
@@ -19,14 +18,14 @@ QUANTIZE_OPTIONS = [False, True]
 
 def run_experiment(model, head_ratio=1.0, mlp_ratio=1.0,
                    skip_blocks=0, quantize=False):
-    """Run a single experiment and return the output file path."""
+    """Run a single experiment."""
     cmd = [
         sys.executable, "scripts/benchmark.py",
         "--model", model,
         "--head-ratio", str(head_ratio),
         "--mlp-ratio", str(mlp_ratio),
         "--skip-blocks", str(skip_blocks),
-        "--output", f"results/runs/{model}",
+        "--output", "results/runs/{}".format(model),
     ]
     if quantize:
         cmd.append("--quantize")
@@ -40,26 +39,31 @@ def run_experiment(model, head_ratio=1.0, mlp_ratio=1.0,
 
 
 def main():
-    print("=== Grid Experiment Runner ===\n")
+    print("=== Grid Experiment Runner ===")
+    print("")
 
-    # Quick scan: vary head ratio only
     for model in MODELS:
-        print(f"\n{'='*60}")
-        print(f"Model: {model}")
-        print(f"{'='*60}")
+        print("=" * 60)
+        print("Model: {}".format(model))
+        print("=" * 60)
+
         # Baseline
         run_experiment(model)
+
         # Head pruning only
-        for hr in HEAD_RATIOS[1:]:  # skip 1.0 (already baseline)
+        for hr in HEAD_RATIOS[1:]:
             run_experiment(model, head_ratio=hr)
+
         # Head + MLP
         for hr in [0.75, 0.5]:
             for mr in [0.75, 0.5]:
                 run_experiment(model, head_ratio=hr, mlp_ratio=mr)
+
         # Best config + quantization
         run_experiment(model, head_ratio=0.75, mlp_ratio=0.75, quantize=True)
 
-    print("\n=== All experiments complete ===")
+    print("")
+    print("=== All experiments complete ===")
 
 
 if __name__ == "__main__":

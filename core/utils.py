@@ -1,61 +1,76 @@
 """
-Utility functions for experiment management, logging, and helpers.
+Utility functions: metrics I/O, parameter counting, profiling helpers.
 """
-
+from typing import Optional, Dict, Tuple
 import json
 import os
-from datetime import datetime
-from pathlib import Path
-from typing import Dict, Any
 import torch
+import torch.nn as nn
 
 
-def save_metrics(metrics: Dict[str, Any],
-                 path: str,
-                 filename: Optional[str] = None):
-    """Save metrics to a JSON file with timestamp."""
-    path = Path(path)
-    path.mkdir(parents=True, exist_ok=True)
+def count_parameters(model: nn.Module) -> float:
+    """Millions of trainable parameters."""
+    return sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6
 
+
+def measure_flops(model: nn.Module,
+                  input_shape: Tuple = (1, 3, 224, 224),
+                  device: str = "cpu") -> float:
+    """Return FLOPs in millions (via thop). Returns 0 on failure."""
+    try:
+        from thop import profile
+        model = model.to(device)
+        dummy = torch.randn(input_shape).to(device)
+        flops, _ = profile(model, inputs=(dummy,), verbose=False)
+        return flops / 1e6
+    except Exception:
+        return 0.0
+
+
+def measure_latency(model: nn.Module,
+                    input_shape: Tuple = (1, 3, 224, 224),
+                    device: str = "cpu",
+                    num_warmup: int = 50,
+                    num_iters: int = 200) -> Tuple[float, float]:
+    """Return (latency_ms, throughput_imgps)."""
+    model = model.to(device).eval()
+    dummy = torch.randn(input_shape).to(device)
+
+    with torch.no_grad():
+        for _ in range(num_warmup):
+            _ = model(dummy)
+
+    torch.cuda.synchronize() if device == "cuda" else None
+    start = torch.cuda.Event(enable_timing=True)
+    end = torch.cuda.Event(enable_timing=True)
+
+    start.record()
+    with torch.no_grad():
+        for _ in range(num_iters):
+            _ = model(dummy)
+    end.record()
+    torch.cuda.synchronize()
+
+    elapsed_ms = start.elapsed_time(end)
+    avg_latency = elapsed_ms / num_iters
+    throughput = (num_iters / elapsed_ms) * 1000
+    return avg_latency, throughput
+
+
+def save_metrics(metrics: dict, output_dir: str = "results/runs",
+                 filename: Optional[str] = None) -> str:
+    """Save metrics dict to JSON. Returns the saved path."""
+    os.makedirs(output_dir, exist_ok=True)
     if filename is None:
-        filename = f"metrics_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-
-    metrics["_timestamp"] = datetime.now().isoformat()
-    with open(path / filename, "w") as f:
+        model = metrics.get("model", "unknown")
+        filename = "metrics_{}.json".format(model)
+    path = os.path.join(output_dir, filename)
+    with open(path, "w") as f:
         json.dump(metrics, f, indent=2)
+    return path
 
-    return str(path / filename)
 
-
-def load_metrics(path: str) -> Dict[str, Any]:
-    """Load metrics from JSON file."""
-    with open(path) as f:
+def load_metrics(path: str) -> dict:
+    """Load metrics from a JSON file."""
+    with open(path, "r") as f:
         return json.load(f)
-
-
-def save_checkpoint(model: torch.nn.Module,
-                    path: str,
-                    extra: Dict[str, Any] = None):
-    """Save model checkpoint."""
-    state = {"model_state_dict": model.state_dict()}
-    if extra:
-        state.update(extra)
-    torch.save(state, path)
-
-
-def load_checkpoint(model: torch.nn.Module,
-                    path: str,
-                    device: str = "cpu"):
-    """Load model checkpoint."""
-    state = torch.load(path, map_location=device)
-    model.load_state_dict(state["model_state_dict"])
-    return model
-
-
-def format_size(n_bytes: float) -> str:
-    """Format byte size to human-readable string."""
-    for unit in ["B", "KB", "MB", "GB"]:
-        if n_bytes < 1024:
-            return f"{n_bytes:.1f}{unit}"
-        n_bytes /= 1024
-    return f"{n_bytes:.1f}TB"

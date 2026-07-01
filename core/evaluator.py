@@ -29,19 +29,15 @@ class ModelMetrics:
     throughput: float = 0.0
 
     def __repr__(self):
-        return (
-            f"Metrics(
-"
-            f"  Top-1: {self.top1:.2f}% | Top-5: {self.top5:.2f}%
-"
-            f"  Params: {self.params_m:.2f}M | FLOPs: {self.flops_m:.2f}M
-"
-            f"  Size: {self.size_mb:.2f}MB | Latency: {self.latency_ms:.2f}ms
-"
-            f"  Throughput: {self.throughput:.0f} img/s
-"
-            f")"
-        )
+        lines = [
+            "Metrics(",
+            f"  Top-1: {self.top1:.2f}% | Top-5: {self.top5:.2f}%",
+            f"  Params: {self.params_m:.2f}M | FLOPs: {self.flops_m:.2f}M",
+            f"  Size: {self.size_mb:.2f}MB | Latency: {self.latency_ms:.2f}ms",
+            f"  Throughput: {self.throughput:.0f} img/s",
+            ")",
+        ]
+        return "\n".join(lines)
 
 
 def evaluate_model(model: nn.Module,
@@ -81,7 +77,7 @@ def measure_flops(model: nn.Module,
         model = model.to(device)
         dummy = torch.randn(input_shape).to(device)
         flops, _ = profile(model, inputs=(dummy,), verbose=False)
-        return flops / 1e6  # convert to MFLOPs
+        return flops / 1e6
     except Exception:
         return 0.0
 
@@ -96,12 +92,10 @@ def measure_latency(model: nn.Module,
     model.eval()
     dummy = torch.randn(input_shape).to(device)
 
-    # Warmup
     with torch.no_grad():
         for _ in range(num_warmup):
             _ = model(dummy)
 
-    # Timed runs
     torch.cuda.synchronize() if device == "cuda" else None
     start = time.time()
     with torch.no_grad():
@@ -110,8 +104,8 @@ def measure_latency(model: nn.Module,
     torch.cuda.synchronize() if device == "cuda" else None
     elapsed = time.time() - start
 
-    avg_latency = (elapsed / num_iters) * 1000  # ms
-    throughput = num_iters / elapsed  # img/s
+    avg_latency = (elapsed / num_iters) * 1000
+    throughput = num_iters / elapsed
     return avg_latency, throughput
 
 
