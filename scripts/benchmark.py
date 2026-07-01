@@ -3,8 +3,8 @@
 Full benchmark pipeline:
   1. Load a lightweight ViT model
   2. Measure baseline metrics
-  3. Apply structured pruning
-  4. Apply PTQ
+  3. Apply structured pruning (actually modifies weights)
+  4. Apply PTQ (CPU-only, handles device move internally)
   5. Measure & compare
 """
 
@@ -32,7 +32,7 @@ def parse_args():
     parser.add_argument("--skip-blocks", type=int, default=0,
                         help="Remove N last blocks")
     parser.add_argument("--quantize", action="store_true",
-                        help="Apply PTQ after pruning")
+                        help="Apply PTQ after pruning (moves to CPU)")
     parser.add_argument("--export-onnx", action="store_true",
                         help="Export to ONNX")
     parser.add_argument("--output", default="results/runs",
@@ -49,14 +49,14 @@ def main():
     print("Config: head_ratio={}, mlp_ratio={}, skip_blocks={}".format(
         args.head_ratio, args.mlp_ratio, args.skip_blocks))
 
-    # 1. Load baseline
+    # 1. Load baseline (on CUDA)
     print("")
     print("=== Loading baseline model ===")
     model, _ = load_model(args.model, pretrained=True)
     baseline = evaluate_model(model, val_loader=None, device=device)
     print("Baseline:", baseline)
 
-    # 2. Prune
+    # 2. Prune (stays on CUDA)
     do_prune = (args.head_ratio < 1.0 or args.mlp_ratio < 1.0
                 or args.skip_blocks > 0)
     if do_prune:
@@ -77,13 +77,13 @@ def main():
         pruned_model = model
         pruned_metrics = baseline
 
-    # 3. Quantize
+    # 3. Quantize (moves to CPU internally)
     if args.quantize:
         print("")
-        print("=== Quantizing ===")
+        print("=== Quantizing (CPU) ===")
         quant_config = PTQConfig(quant_type="dynamic",
                                  export_onnx=args.export_onnx)
-        quant_model = apply_ptq(pruned_model, quant_config)
+        quant_model, quant_device = apply_ptq(pruned_model, quant_config)
 
         from core.evaluator import count_parameters, compute_model_size
         quant_metrics = ModelMetrics(
@@ -93,7 +93,7 @@ def main():
         )
         from core.evaluator import measure_latency
         quant_metrics.latency_ms, quant_metrics.throughput = \
-            measure_latency(quant_model, device=device)
+            measure_latency(quant_model, device=quant_device)
         print("After PTQ:", quant_metrics)
     else:
         quant_model = pruned_model
@@ -109,7 +109,7 @@ def main():
         print("")
         print("ONNX exported: {} ({:.2f} MB)".format(onnx_path, onnx_size))
 
-    # 5. Save results
+    # 5. Save
     results = {
         "model": args.model,
         "config": {

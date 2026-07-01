@@ -2,11 +2,9 @@
 Structured Pruning for Vision Transformers.
 
 Supports:
-- Head pruning (reduce number of attention heads)
-- MLP intermediate dimension pruning
+- Head pruning (reduce number of attention heads) — actually modifies qkv weights
+- MLP intermediate dimension pruning — actually slices fc1/fc2
 - Layer skipping (remove entire blocks)
-
-Adapted for lightweight ViT variants (DeiT, EfficientFormer, MobileViT, EdgeViT).
 """
 
 from dataclasses import dataclass, field
@@ -19,19 +17,15 @@ import json
 
 @dataclass
 class PruningConfig:
-    """Configuration for structured pruning.
-
-    Each ratio is the fraction to KEEP (0.0 = remove all, 1.0 = keep all).
-    """
-    head_prune_ratio: float = 0.75       # keep 75% of heads per layer
-    mlp_prune_ratio: float = 0.75        # keep 75% of MLP intermediate dim
-    layer_skip_ids: List[int] = field(default_factory=list)  # block indices to remove
-    prune_embed_dim: bool = False        # not implemented for most archs
-    skip_blocks: int = 0                 # N last blocks to remove
+    """Fraction to KEEP (0.0 = remove all, 1.0 = keep all)."""
+    head_prune_ratio: float = 1.0
+    mlp_prune_ratio: float = 1.0
+    layer_skip_ids: List[int] = field(default_factory=list)
+    skip_blocks: int = 0
 
 
 class StructuredPruner:
-    """Apply structured pruning to a timm ViT model."""
+    """Apply structured pruning to a timm ViT model — actually modifies weights."""
 
     def __init__(self, model: nn.Module, config: PruningConfig):
         self.orig_model = model
@@ -40,94 +34,129 @@ class StructuredPruner:
         self._pruning_report = {}
 
     def prune(self) -> nn.Module:
-        """Execute pruning and return the pruned model."""
         model = copy.deepcopy(self.orig_model)
         model.eval()
-
         report = {}
 
-        # 1. Remove entire blocks if specified
         if self.config.skip_blocks > 0:
-            model, skipped = self._skip_blocks(model, self.config.skip_blocks)
-            report["skipped_blocks"] = skipped
+            model, n_skipped = self._skip_blocks(model, self.config.skip_blocks)
+            report["blocks_skipped"] = n_skipped
 
-        # 2. Head pruning
         if self.config.head_prune_ratio < 1.0:
-            model, heads_kept = self._prune_heads(model, self.config.head_prune_ratio)
-            report["heads_kept"] = heads_kept
+            model, heads = self._prune_heads(model, self.config.head_prune_ratio)
+            report["heads_kept"] = heads
 
-        # 3. MLP pruning
         if self.config.mlp_prune_ratio < 1.0:
-            model, mlp_kept = self._prune_mlp(model, self.config.mlp_prune_ratio)
-            report["mlp_dims_kept"] = mlp_kept
+            model, mlp = self._prune_mlp(model, self.config.mlp_prune_ratio)
+            report["mlp_dims_kept"] = mlp
 
         self.pruned_model = model
         self._pruning_report = report
         return model
 
     def _skip_blocks(self, model, n):
-        """Remove the last n transformer blocks."""
-        blocks = model.blocks if hasattr(model, "blocks") else None
+        blocks = getattr(model, "blocks", None)
         if blocks is None:
-            raise AttributeError("Model has no 'blocks' attribute")
-
-        kept = list(blocks.children())[:-n]
-        # Replace blocks with only the kept ones
-        # For timm, blocks is a Sequential
+            raise AttributeError("Model has no 'blocks' attr")
         from collections import OrderedDict
-        new_blocks = nn.Sequential(OrderedDict([
-            (name, kept[i]) for i, (name, _) in enumerate(blocks.named_children()) if i < len(kept)
-        ]))
-        model.blocks = new_blocks
+        children = list(blocks.named_children())
+        new = nn.Sequential(OrderedDict(children[:-n]))
+        model.blocks = new
         return model, n
 
     def _prune_heads(self, model, keep_ratio):
-        """Prune attention heads in each block."""
+        """Actually prune attention heads — shrink qkv, proj, update num_heads."""
         kept = {}
-        for name, block in model.named_children() if not hasattr(model, 'blocks')                 else model.blocks.named_children():
-            attn = getattr(block, 'attn', None)
+        blocks = getattr(model, "blocks", None)
+        if blocks is None:
+            return model, kept
+
+        for name, block in blocks.named_children():
+            attn = getattr(block, "attn", None)
             if attn is None:
                 continue
-            # timm's attention: qkv weight shape [3 * num_heads * head_dim, embed_dim]
-            qkv = getattr(attn, 'qkv', None)
+            qkv = getattr(attn, "qkv", None)
             if qkv is None:
-                # Some impls use separate q, k, v
                 continue
 
-            embed_dim = attn.embed_dim if hasattr(attn, 'embed_dim') else None
-            num_heads = attn.num_heads if hasattr(attn, 'num_heads') else None
-            if embed_dim is None or num_heads is None:
+            # timm Attention uses num_heads + head_dim (not embed_dim)
+            num_heads = getattr(attn, "num_heads", None)
+            head_dim = getattr(attn, "head_dim", None)
+            if num_heads is None or head_dim is None:
                 continue
 
-            head_dim = embed_dim // num_heads
+            embed_dim = num_heads * head_dim  # infer from qkv shape
             n_keep = max(1, int(num_heads * keep_ratio))
             kept[name] = n_keep
+
+            # qkv.weight: [3 * num_heads * head_dim, embed_dim]
+            W_qkv = qkv.weight.data
+            new_qkv = nn.Linear(embed_dim, 3 * n_keep * head_dim, bias=qkv.bias is not None)
+            W_reshaped = W_qkv.view(3, num_heads, head_dim, embed_dim)
+            W_kept = W_reshaped[:, :n_keep, :, :].contiguous().view(3 * n_keep * head_dim, embed_dim)
+            new_qkv.weight.data = W_kept
+            if qkv.bias is not None:
+                b_reshaped = qkv.bias.data.view(3, num_heads, head_dim)
+                b_kept = b_reshaped[:, :n_keep, :].contiguous().view(3 * n_keep * head_dim)
+                new_qkv.bias.data = b_kept
+            attn.qkv = new_qkv
+
+            # proj: [embed_dim, n_keep * head_dim] — slice columns
+            proj = getattr(attn, "proj", None)
+            if proj is not None:
+                new_proj = nn.Linear(n_keep * head_dim, embed_dim, bias=proj.bias is not None)
+                new_proj.weight.data = proj.weight.data[:, :n_keep * head_dim]
+                if proj.bias is not None:
+                    new_proj.bias.data = proj.bias.data
+                attn.proj = new_proj
+
+            attn.num_heads = n_keep
+            attn.attn_dim = n_keep * head_dim
 
         return model, kept
 
     def _prune_mlp(self, model, keep_ratio):
-        """Prune MLP intermediate dimension in each block."""
+        """Actually prune MLP intermediate dim — slice fc1/fc2."""
         kept = {}
-        for name, block in model.named_children() if not hasattr(model, 'blocks')                 else model.blocks.named_children():
-            mlp = getattr(block, 'mlp', None)
+        blocks = getattr(model, "blocks", None)
+        if blocks is None:
+            return model, kept
+
+        for name, block in blocks.named_children():
+            mlp = getattr(block, "mlp", None)
             if mlp is None:
                 continue
 
-            fc1 = getattr(mlp, 'fc1', None)  # intermediate linear
-            if fc1 is None:
+            fc1 = getattr(mlp, "fc1", None)
+            fc2 = getattr(mlp, "fc2", None)
+            if fc1 is None or fc2 is None:
                 continue
 
-            out_features = fc1.out_features
-            n_keep = max(16, int(out_features * keep_ratio))
+            embed_dim = fc1.in_features
+            inter_dim = fc1.out_features
+            n_keep = max(16, int(inter_dim * keep_ratio))
             kept[name] = n_keep
+
+            # fc1: [inter_dim, embed_dim] -> slice first n_keep rows
+            new_fc1 = nn.Linear(embed_dim, n_keep, bias=fc1.bias is not None)
+            new_fc1.weight.data = fc1.weight.data[:n_keep, :]
+            if fc1.bias is not None:
+                new_fc1.bias.data = fc1.bias.data[:n_keep]
+            mlp.fc1 = new_fc1
+
+            # fc2: [embed_dim, inter_dim] -> slice first n_keep columns
+            new_fc2 = nn.Linear(n_keep, embed_dim, bias=fc2.bias is not None)
+            new_fc2.weight.data = fc2.weight.data[:, :n_keep]
+            if fc2.bias is not None:
+                new_fc2.bias.data = fc2.bias.data
+            mlp.fc2 = new_fc2
 
         return model, kept
 
-    def get_report(self) -> dict:
+    def get_report(self):
         return self._pruning_report
 
     def summarize(self):
-        """Return a human-readable summary."""
         if not self.pruned_model:
             return "Pruning not yet executed. Call .prune() first."
         return json.dumps(self._pruning_report, indent=2)

@@ -1,12 +1,5 @@
 """
 Evaluation metrics for ViT pruning + quantization benchmarking.
-
-Measures:
-- Top-1 / Top-5 accuracy
-- Model size (MB, parameter count)
-- FLOPs
-- Inference latency
-- Throughput (images/sec)
 """
 
 from dataclasses import dataclass
@@ -15,6 +8,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 import time
+import io
 
 
 @dataclass
@@ -45,35 +39,40 @@ class ModelMetrics:
 def evaluate_model(model: nn.Module,
                    val_loader: Optional[torch.utils.data.DataLoader] = None,
                    device: str = "cuda") -> ModelMetrics:
-    """Full evaluation: accuracy + compute metrics."""
     metrics = ModelMetrics()
     metrics.params_m = count_parameters(model)
     metrics.size_mb = compute_model_size(model)
     metrics.flops_m = measure_flops(model, device=device)
     metrics.latency_ms, metrics.throughput = measure_latency(model, device=device)
-
     if val_loader is not None:
         metrics.top1, metrics.top5 = measure_accuracy(model, val_loader, device)
-
     return metrics
 
 
 def count_parameters(model: nn.Module) -> float:
-    """Count trainable parameters in millions."""
-    return sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6
+    """Count all parameters in millions, including quantized packed weights."""
+    total = 0
+    for t in model.state_dict().values():
+        if isinstance(t, torch.Tensor):
+            total += t.numel()
+        elif isinstance(t, tuple):
+            for item in t:
+                if isinstance(item, torch.Tensor):
+                    total += item.numel()
+    return total / 1e6
 
 
 def compute_model_size(model: nn.Module) -> float:
-    """Estimate model size in MB (assuming float32 storage)."""
-    param_size = sum(p.numel() * p.element_size() for p in model.parameters())
-    buffer_size = sum(b.numel() * b.element_size() for b in model.buffers())
-    return (param_size + buffer_size) / (1024 ** 2)
+    """Estimate model file size in MB via state_dict serialization.
+    This correctly captures quantized packed weights."""
+    buf = io.BytesIO()
+    torch.save(model.state_dict(), buf)
+    return buf.tell() / (1024 ** 2)
 
 
 def measure_flops(model: nn.Module,
                   input_shape: Tuple = (1, 3, 224, 224),
                   device: str = "cuda") -> float:
-    """Measure FLOPs using thop. Returns millions of FLOPs."""
     try:
         from thop import profile
         model = model.to(device)
@@ -89,7 +88,6 @@ def measure_latency(model: nn.Module,
                     device: str = "cuda",
                     num_warmup: int = 50,
                     num_iters: int = 200) -> Tuple[float, float]:
-    """Measure average inference latency and throughput."""
     model = model.to(device)
     model.eval()
     dummy = torch.randn(input_shape).to(device)
@@ -115,7 +113,6 @@ def measure_accuracy(model: nn.Module,
                      val_loader: torch.utils.data.DataLoader,
                      device: str = "cuda",
                      max_batches: Optional[int] = None) -> Tuple[float, float]:
-    """Top-1 and Top-5 accuracy."""
     model = model.to(device)
     model.eval()
     top1_correct = 0

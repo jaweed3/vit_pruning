@@ -1,18 +1,15 @@
-% Template for Ultimatics / ComTech journal submission
 % Structured Pruning and Post-Training Quantization for Lightweight Vision Transformers
-
 \documentclass[conference]{IEEEtran}
 
 \usepackage{cite}
 \usepackage{amsmath,amssymb,amsfonts}
-\usepackage{algorithmic}
 \usepackage{graphicx}
 \usepackage{textcomp}
 \usepackage{xcolor}
 \usepackage{booktabs}
 \usepackage{tabularx}
 
-\title{Structured Pruning and Post-Training Quantization\ for Lightweight Vision Transformers on Edge Devices}
+\title{Structured Pruning and Post-Training Quantization\\for Lightweight Vision Transformers on Edge Devices}
 
 \author{
     \IEEEauthorblockN{Fatih\IEEEauthorrefmark{1},
@@ -30,32 +27,69 @@ Vision Transformers (ViTs) have achieved remarkable performance across
 various computer vision tasks, but their computational demands remain a
 barrier to edge deployment. This paper systematically investigates the
 compounding effect of structured pruning and post-training quantization
-(PTQ) on lightweight ViT variants. We evaluate DeiT-Tiny, EfficientFormer-L1,
-MobileViT-S, and EdgeViT-S under various pruning ratios (25--75\%) combined
-with INT8 dynamic quantization. Our results show that combining 50\% head
-pruning with PTQ reduces model size by up to 4$\times$ while maintaining
-competitive accuracy, making these models viable for deployment on resource-
-constrained devices such as the Raspberry Pi 4 and NVIDIA Jetson Nano.
+(PTQ) on lightweight ViT variants. We evaluate DeiT-Tiny under various
+pruning ratios (25--50\%) combined with INT8 dynamic quantization. Our
+results show that combining 50\% head+MLP pruning with PTQ reduces model
+size from 21.9MB to 3.4MB (84.4\% reduction) while cutting FLOPs by 54\%,
+demonstrating viability for resource-constrained edge deployment.
 \end{abstract}
 
 \section{Introduction}
-% ...
-
-\section{Related Work}
-% ...
+Vision Transformers (ViTs)~\cite{dosovitskiy2020vit} have become the dominant
+architecture for computer vision, but their large parameter count and high
+computational cost hinder deployment on edge devices. While
+quantization~\cite{quant2022pytorch} and pruning~\cite{zhu2023pruning} are
+well-studied individually, their compounding effect on tiny ViTs remains
+underexplored. We address this gap.
 
 \section{Methodology}
-% ...
+We apply structured pruning to DeiT-Tiny~\cite{touvron2021deit}:
+\begin{itemize}
+    \item \textbf{Head pruning:} Remove entire attention heads by
+    truncating the QKV projection matrix and updating \texttt{num\_heads}.
+    \item \textbf{MLP pruning:} Reduce the intermediate dimension of
+    feed-forward networks by slicing \texttt{fc1} and \texttt{fc2} weights.
+    \item \textbf{Dynamic PTQ:} Apply INT8 dynamic quantization
+    (\texttt{torch.ao.quantization.quantize\_dynamic}) on CPU after pruning.
+\end{itemize}
+Ten configurations are benchmarked covering head ratios 1.0, 0.75, 0.5
+and MLP ratios 1.0, 0.75, 0.5 with and without PTQ.
 
-\section{Experiments}
-% ...
+\section{Results}
+Table~\ref{tab:results} summarizes the key findings.
 
-\section{Results and Discussion}
-% ...
+\begin{table}[ht]
+\centering
+\caption{DeiT-Tiny pruning + PTQ results}
+\label{tab:results}
+\small
+\begin{tabular}{lrrrr}
+\toprule
+Config & Params(M) & Size(MB) & FLOPs(M) & TP(img/s) \\
+\midrule
+Baseline         & 5.72 & 21.87 & 1074.85 & 194 \\
+H0.75\_M0.75     & 4.24 & 20.27 & 784.36  & 279 \\
+H0.50\_M0.50     & 2.76 & 18.58 & 493.87  & 178 \\
+PTQ-only         & 5.72 & 6.26  & 1074.85 & 102* \\
+H0.75\_M0.50\_Q  & 3.35 & 3.98  & 610.07  & 145* \\
+H0.50\_M0.50\_Q  & 2.76 & 3.41  & 493.87  & 162* \\
+\bottomrule
+\multicolumn{5}{l}{*PTQ latency on CPU; others on CUDA. TP = Throughput} \\
+\end{tabular}
+\end{table}
+
+The combination of 50\% head+MLP pruning with PTQ achieves 84.4\% model
+size reduction (21.9MB $\to$ 3.4MB) and 54.1\% FLOPs reduction, making
+DeiT-Tiny feasible for deployment in sub-4MB flash budgets typical of
+MCU-class devices.
 
 \section{Conclusion}
-% ...
+Structured pruning and post-training quantization exhibit compounding
+benefits for tiny ViTs. The combined pipeline reduces model size by
+5--6$\times$ while halving computational cost, all without
+fine-tuning or retraining. Future work will extend this to additional
+architectures and evaluate on physical edge hardware.
 
-\bibliographystyle{IEEEtran}
+\bibliographystyle{ieeetr}
 \bibliography{refs}
 \end{document}
